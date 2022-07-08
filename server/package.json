@@ -1,0 +1,9 @@
+{
+  "main": "src/handlers/listen.js",
+  "author": "Two",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^16.0.1",
+    "uWebSockets.js": "uNetworking/uWebSockets.js#v20.10.0"
+  }
+}

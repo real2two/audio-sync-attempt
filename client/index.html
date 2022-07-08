@@ -1,0 +1,146 @@
+<html>
+    <body>
+        <p>
+            <div id="time">Loading...</div>
+            <div id="audio_delay"></div>
+            <button id="resync">Resync Time</button> <button id="play">Play</button>
+        </p>
+
+        <script>
+            const serverClock = {
+                div: document.getElementById("time"),
+                button: document.getElementById("resync"),
+
+                offset: null,
+                difference: null,
+
+                total_loops: 6,
+
+                time: () => performance.now() + serverClock.offset,
+
+                fixing: false
+            }
+
+            const audio = {
+                div: document.getElementById("audio_delay"),
+                button: document.getElementById("play"),
+                
+                file: new Audio("https://cdn.pixabay.com/audio/2022/01/05/audio_656f5574c1.mp3"),
+                shouldBeCurrentTime: () => (serverClock.time() / 1000) % audio.file.duration,
+                delay: () => Math.abs(audio.shouldBeCurrentTime() - audio.file.currentTime) * 1000,
+                
+                max_delay: 100,
+                fixing: false
+            }
+
+            const fixAudioDelay = playQueued => {
+                if (audio.fixing === true) return;
+                audio.fixing = true;
+
+                if (audio.file.currentTime === 0) {
+                    audio.fixing = false;
+                    return setTimeout(() => fixAudioDelay(playQueued), 1);
+                }
+                
+                const playStarted = performance.now();
+                const audioDelay = playStarted - playQueued;
+
+                const currentDelay = audio.delay();
+
+                audio.file.currentTime = audio.shouldBeCurrentTime() - (audioDelay / 1000);
+
+                audio.fixing = false;
+            };
+
+            serverClock.button.onclick = () => {
+                synconizeClock();
+            }
+
+            audio.button.onclick = () => {
+                audio.file.volume = 0;
+                audio.file.play();
+
+                const playQueued = performance.now();
+                fixAudioDelay(playQueued);
+            }
+
+            synconizeClock();
+
+            async function synconizeClock() {
+                if (serverClock.fixing === true) return;
+                serverClock.fixing = true;
+
+                console.log("[WEBSOCKET] Attempting to connect...")
+
+                const ws = new WebSocket("ws://localhost:8000");
+                ws.sendJSON = c => ws.send(JSON.stringify(c));
+
+                ws.onopen = () => {
+                    console.log("[WEBSOCKET] Websocket opened.")
+
+                    let loop = 0;
+
+                    const client_sent = performance.now();
+                    ws.sendJSON({ client_sent });
+
+                    ws.onmessage = evt => {
+                        setTimeout(() => {
+                            // Calculate average offset.
+
+                            const client_recieved = performance.now();
+                            const { server_sent, offset_1 } = JSON.parse(evt.data);
+
+                            const offset_2 = server_sent - client_recieved;
+
+                            const average_offset = (offset_1 + offset_2) / 2;
+                            const offset_difference = Math.abs(offset_1 - offset_2);
+
+                            // Only keep the most accurate offset.
+
+                            if (serverClock.difference > offset_difference || serverClock.difference === null) {
+                                serverClock.offset = average_offset;
+                                serverClock.difference = offset_difference;
+                            }
+
+                            // Loop again if necessary.
+
+                            if (++loop === serverClock.total_loops) {
+                                serverClock.fixing = false;
+                                return ws.close();
+                            }
+
+                            ws.sendJSON({ client_sent });
+                        }, 180);
+                    }
+                }
+
+                ws.onclose = () => {
+                    console.log("[WEBSOCKET] Websocket ended.")
+                }
+            }
+
+            setInterval(() => {
+                if (serverClock.offset === null) return;
+                serverClock.div.innerHTML = `${serverClock.time()}ms`;
+
+                audio.div.innerHTML = `${audio.delay()}ms`;
+            }, 1);
+
+            setInterval(() => {
+                if (audio.paused) return;
+                
+                if (audio.delay() > audio.max_delay) {
+                    if (audio.file.volume !== 0) {
+                        audio.file.volume = 0;
+                    }
+
+                    fixAudioDelay(performance.now());
+                } else {
+                    if (audio.file.volume !== 1) {
+                        audio.file.volume = 1;
+                    }
+                }
+            }, 100);
+        </script>
+    </body>
+</html>
