@@ -2,9 +2,7 @@ import 'dotenv/config';
 import { App } from 'uWebSockets.js';
 
 import upgrade from '../websocket/upgrade.js';
-import open from '../websocket/open.js';
 import message from '../websocket/message.js';
-import close from '../websocket/close.js';
 
 App()
     .ws('/', {
@@ -13,9 +11,7 @@ App()
         maxPayloadLength: 512,
 
         upgrade,
-        open,
-        message,
-        close
+        message
     })
     .listen(parseFloat(process.env.PORT), listenSocket => {
         if (listenSocket) {
