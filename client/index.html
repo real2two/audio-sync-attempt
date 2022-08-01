@@ -1,15 +1,16 @@
 <html>
+    <head>
+        <script src="lib/p5.js"></script>
+        <script src="lib/p5.sound.min.js"></script>
+    </head>
     <body>
-        <p>
-            <div id="time">Loading...</div>
-            <div id="audio_delay"></div>
-            <button id="resync">Resync Time</button> <button id="play">Play</button>
-        </p>
+        <div id="content"></div>
 
         <script>
+            // [ Time synchronization ]
+
             const serverClock = {
-                div: document.getElementById("time"),
-                button: document.getElementById("resync"),
+                ws: 'localhost:8080',
 
                 offset: null,
                 difference: null,
@@ -18,65 +19,20 @@
 
                 time: () => performance.now() + serverClock.offset,
 
-                fixing: false
+                isFixing: false
             }
-
-            const audio = {
-                div: document.getElementById("audio_delay"),
-                button: document.getElementById("play"),
-                
-                file: new Audio("https://cdn.pixabay.com/audio/2022/01/05/audio_656f5574c1.mp3"),
-                shouldBeCurrentTime: () => (serverClock.time() / 1000) % audio.file.duration,
-                delay: () => Math.abs(audio.shouldBeCurrentTime() - audio.file.currentTime) * 1000,
-                
-                max_delay: 100,
-                fixing: false
-            }
-
-            const fixAudioDelay = playQueued => {
-                if (audio.fixing === true) return;
-                audio.fixing = true;
-
-                if (audio.file.currentTime === 0) {
-                    audio.fixing = false;
-                    return setTimeout(() => fixAudioDelay(playQueued), 1);
-                }
-                
-                const playStarted = performance.now();
-                const audioDelay = playStarted - playQueued;
-
-                const currentDelay = audio.delay();
-
-                audio.file.currentTime = audio.shouldBeCurrentTime() - (audioDelay / 1000);
-
-                audio.fixing = false;
-            };
-
-            serverClock.button.onclick = () => {
-                synconizeClock();
-            }
-
-            audio.button.onclick = () => {
-                audio.file.volume = 0;
-                audio.file.play();
-
-                const playQueued = performance.now();
-                fixAudioDelay(playQueued);
-            }
-
-            synconizeClock();
 
             async function synconizeClock() {
-                if (serverClock.fixing === true) return;
-                serverClock.fixing = true;
+                if (serverClock.isFixing === true) return;
+                serverClock.isFixing = true;
 
-                console.log("[WEBSOCKET] Attempting to connect...")
+                console.log('[WEBSOCKET] Attempting to connect...')
 
-                const ws = new WebSocket("ws://localhost:8000");
+                const ws = new WebSocket(`ws://${serverClock.ws}`);
                 ws.sendJSON = c => ws.send(JSON.stringify(c));
 
                 ws.onopen = () => {
-                    console.log("[WEBSOCKET] Websocket opened.")
+                    console.log('[WEBSOCKET] Websocket opened.');
 
                     let loop = 0;
 
@@ -84,63 +40,87 @@
                     ws.sendJSON({ client_sent });
 
                     ws.onmessage = evt => {
-                        setTimeout(() => {
-                            // Calculate average offset.
+                        // Calculate average offset.
 
-                            const client_recieved = performance.now();
-                            const { server_sent, offset_1 } = JSON.parse(evt.data);
+                        const client_recieved = performance.now();
+                        const { server_sent, offset_1 } = JSON.parse(evt.data);
 
-                            const offset_2 = server_sent - client_recieved;
+                        const offset_2 = server_sent - client_recieved;
 
-                            const average_offset = (offset_1 + offset_2) / 2;
-                            const offset_difference = Math.abs(offset_1 - offset_2);
+                        const average_offset = (offset_1 + offset_2) / 2;
+                        const offset_difference = Math.abs(offset_1 - offset_2);
 
-                            // Only keep the most accurate offset.
+                        // Only keep the most accurate offset.
 
-                            if (serverClock.difference > offset_difference || serverClock.difference === null) {
-                                serverClock.offset = average_offset;
-                                serverClock.difference = offset_difference;
-                            }
+                        if (serverClock.difference > offset_difference || serverClock.difference === null) {
+                            serverClock.offset = average_offset;
+                            serverClock.difference = offset_difference;
+                        }
 
-                            // Loop again if necessary.
+                        // Loop again if necessary.
 
-                            if (++loop === serverClock.total_loops) {
-                                serverClock.fixing = false;
-                                return ws.close();
-                            }
+                        if (++loop >= serverClock.total_loops) {
+                            serverClock.isFixing = false;
+                            return ws.close();
+                        }
 
-                            ws.sendJSON({ client_sent });
-                        }, 180);
+                        ws.sendJSON({ client_sent });
                     }
                 }
 
                 ws.onclose = () => {
-                    console.log("[WEBSOCKET] Websocket ended.")
+                    console.log('[WEBSOCKET] Websocket ended.')
                 }
             }
 
-            setInterval(() => {
-                if (serverClock.offset === null) return;
-                serverClock.div.innerHTML = `${serverClock.time()}ms`;
+            // [ Audio ]
 
-                audio.div.innerHTML = `${audio.delay()}ms`;
-            }, 1);
+            let audioTrack;
+            
+            const audioInfo = {
+                shouldBe: () => (serverClock.time() / 1000) % audioTrack.duration(),
+                delay: () => Math.abs(audioInfo.shouldBe() - audioTrack.currentTime()) * 1000,
 
-            setInterval(() => {
-                if (audio.paused) return;
-                
-                if (audio.delay() > audio.max_delay) {
-                    if (audio.file.volume !== 0) {
-                        audio.file.volume = 0;
+                play: withAddedDelay => {
+                    if (audioTrack.isPlaying()) audioTrack.stop();
+                    audioTrack.loop(undefined, undefined, undefined, audioInfo.shouldBe());
+                },
+
+                isFixing: false
+            }
+
+            function preload() {
+                soundFormats('mp3');
+                audioTrack = loadSound('song.mp3');
+            }
+
+            function setup() {
+                synconizeClock();
+
+                document.getElementById('content').innerHTML = `
+                    Estimated server time: <span id="time"></span><br>
+                    Audio delay: <span id="delay"></span><br>
+                    <button onclick="synconizeClock()">Resynchronize time.</button>
+                    <button onclick="audioInfo.play()">Play</button>
+                `;
+
+                const timeDiv = document.getElementById('time');
+                const audioDelay = document.getElementById('delay');
+
+                setInterval(() => {
+                    if (serverClock.offset === null) return;
+                    timeDiv.innerHTML = `${serverClock.time()}ms`;
+                    audioDelay.innerHTML = `${audioInfo.delay()}ms`;
+                }, 0);
+
+                setInterval(() => {
+                    if (audioTrack.isPaused()) return;
+                    
+                    if (audioInfo.delay() > 50) {
+                        audioInfo.play();
                     }
-
-                    fixAudioDelay(performance.now());
-                } else {
-                    if (audio.file.volume !== 1) {
-                        audio.file.volume = 1;
-                    }
-                }
-            }, 100);
+                }, 100);
+            }
         </script>
     </body>
 </html>
